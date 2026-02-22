@@ -162,6 +162,8 @@ Google Home / Google Nest 控制器。
 ```
 1. ChromecastPlay（純 Go，最可靠）     ← 有 --google-ip 時優先使用
 2. catt（備用，pip install catt）      ← ChromecastPlay 失敗時嘗試
+
+ go run ./... speak --speaker google --google-ip 192.168.0.224 "你好，這是一個來自 Google Home 的語音測試" 
 ```
 
 **HTTP 串流伺服器：**

@@ -23,8 +23,8 @@ type AudioPlayer interface {
 
 type AudioFileInfo struct {
 	Path        string
-	Ext         string        // mp3, wav, flac, aac, ogg, aiff
-	ContentType string        // audio/mpeg, audio/wav ...
+	Ext         string // mp3, wav, flac, aac, ogg, aiff
+	ContentType string // audio/mpeg, audio/wav ...
 	Size        int64
 	Duration    time.Duration // 需要 ffprobe
 }
@@ -148,6 +148,7 @@ func (x *XiaoAISpeaker) PlayFile(filePath string) error {
 	}
 
 	printFileInfo("小愛同學", info)
+	var lastErr error
 
 	// 方法 1: MiIO play_url 指令（需要本機 HTTP 伺服器）
 	localIP, _ := getLocalIP()
@@ -163,6 +164,7 @@ func (x *XiaoAISpeaker) PlayFile(filePath string) error {
 			if err := x.playURLViaMiIO(audioURL); err == nil {
 				return nil
 			} else {
+				lastErr = err
 				fmt.Printf("⚠️  MiIO play_url 失敗，嘗試其他方式: %v\n", err)
 			}
 		}
@@ -170,11 +172,13 @@ func (x *XiaoAISpeaker) PlayFile(filePath string) error {
 
 	// 方法 2: miiocli（python-miio）
 	if commandExists("miiocli") {
-		return x.playFileViaMiIOCli(info.Path)
-	}
-
-	// 方法 3: 雲端 play_url（若有雲端 token）
-	if x.cfg.XiaoAIMiID != "" {
+		if err := x.playFileViaMiIOCli(info.Path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	} else if x.cfg.XiaoAIMiID != "" {
+		// 方法 3: 雲端 play_url（若有雲端 token）
 		audioURL, stop, err := serveFileTemporarily(info.Path, info.ContentType, 19876)
 		if err != nil {
 			return err
@@ -184,9 +188,17 @@ func (x *XiaoAISpeaker) PlayFile(filePath string) error {
 			waitDur = 30 * time.Second
 		}
 		defer func() { time.Sleep(waitDur); stop() }()
-		return x.playURLViaCloud(audioURL)
+
+		if err := x.playURLViaCloud(audioURL); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
 	}
 
+	if lastErr != nil {
+		return fmt.Errorf("小愛同學播放失敗: %v", lastErr)
+	}
 	return fmt.Errorf("播放失敗：需要設定 XIAOAI_DEVICE_IP + XIAOAI_DEVICE_TOKEN 或 XIAOAI_MI_ID")
 }
 
