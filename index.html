@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>語音簡報 · Voice Briefing</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #141418;
+    --surface2: #1c1c22;
+    --border: #2a2a35;
+    --text: #e8e8f0;
+    --muted: #6b6b80;
+    --google-color: #4285f4;
+    --apple-color: #c8c8cf;
+    --xiaomi-color: #ff6900;
+    --accent: #7c6af7;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Serif TC', serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 48px 24px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: 
+      radial-gradient(ellipse 60% 40% at 20% 10%, rgba(124,106,247,0.08) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 30% at 80% 80%, rgba(66,133,244,0.06) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  .header .label {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 4px;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  .header h1 {
+    font-size: clamp(28px, 5vw, 44px);
+    font-weight: 300;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .header p {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 300;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 680px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    margin-bottom: 20px;
+  }
+
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  /* Speaker Selection */
+  .speakers {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .speaker-btn {
+    background: var(--surface2);
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-family: 'Noto Serif TC', serif;
+  }
+
+  .speaker-btn:hover {
+    border-color: var(--border);
+    color: var(--text);
+    transform: translateY(-2px);
+  }
+
+  .speaker-btn.active {
+    color: var(--text);
+  }
+
+  .speaker-btn[data-speaker="google"].active {
+    border-color: var(--google-color);
+    background: rgba(66,133,244,0.08);
+    box-shadow: 0 0 20px rgba(66,133,244,0.12);
+  }
+
+  .speaker-btn[data-speaker="apple"].active {
+    border-color: var(--apple-color);
+    background: rgba(200,200,207,0.06);
+    box-shadow: 0 0 20px rgba(200,200,207,0.08);
+  }
+
+  .speaker-btn[data-speaker="xiaomi"].active {
+    border-color: var(--xiaomi-color);
+    background: rgba(255,105,0,0.08);
+    box-shadow: 0 0 20px rgba(255,105,0,0.12);
+  }
+
+  .speaker-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+
+  .speaker-name {
+    font-size: 13px;
+    font-weight: 400;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+
+  .speaker-btn.active[data-speaker="google"] .status-dot { background: var(--google-color); }
+  .speaker-btn.active[data-speaker="apple"] .status-dot { background: var(--apple-color); }
+  .speaker-btn.active[data-speaker="xiaomi"] .status-dot { background: var(--xiaomi-color); }
+
+  /* Text area */
+  .text-area-wrap {
+    position: relative;
+  }
+
+  textarea {
+    width: 100%;
+    background: var(--surface2);
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: 'Noto Serif TC', serif;
+    font-size: 15px;
+    line-height: 1.8;
+    padding: 16px;
+    resize: vertical;
+    min-height: 160px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  textarea:focus {
+    border-color: var(--accent);
+  }
+
+  textarea::placeholder {
+    color: var(--muted);
+  }
+
+  .char-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    margin-top: 8px;
+  }
+
+  /* Settings row */
+  .settings-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 4px;
+  }
+
+  .setting-group label {
+    display: block;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .slider-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    appearance: none;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  .slider-val {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    min-width: 28px;
+    text-align: right;
+  }
+
+  /* Send button */
+  .send-btn {
+    width: 100%;
+    max-width: 680px;
+    padding: 18px;
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .send-btn:hover {
+    background: #9080ff;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(124,106,247,0.3);
+  }
+
+  .send-btn:active {
+    transform: translateY(0);
+  }
+
+  .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  /* Log */
+  .log {
+    width: 100%;
+    max-width: 680px;
+    margin-top: 20px;
+  }
+
+  .log-entry {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 10px 14px;
+    border-left: 2px solid var(--border);
+    margin-bottom: 8px;
+    color: var(--muted);
+    animation: slideIn 0.3s ease;
+  }
+
+  .log-entry.success { border-color: #4caf7a; color: #4caf7a; }
+  .log-entry.error { border-color: #f26464; color: #f26464; }
+  .log-entry.info { border-color: var(--accent); color: var(--accent); }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* Wave animation */
+  .wave-indicator {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 24px;
+  }
+
+  .wave-indicator.active { display: flex; }
+
+  .wave-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    animation: wave 1s ease-in-out infinite;
+  }
+  .wave-bar:nth-child(2) { animation-delay: 0.1s; }
+  .wave-bar:nth-child(3) { animation-delay: 0.2s; }
+  .wave-bar:nth-child(4) { animation-delay: 0.3s; }
+  .wave-bar:nth-child(5) { animation-delay: 0.2s; }
+
+  @keyframes wave {
+    0%, 100% { height: 4px; }
+    50% { height: 20px; }
+  }
+
+  /* Config hints */
+  .config-hint {
+    display: none;
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(124,106,247,0.06);
+    border: 1px solid rgba(124,106,247,0.2);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .config-hint.show { display: block; }
+
+  .config-hint code {
+    font-family: 'Space Mono', monospace;
+    color: var(--accent);
+    font-size: 11px;
+    background: rgba(124,106,247,0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  @media (max-width: 480px) {
+    .speakers { grid-template-columns: repeat(3, 1fr); }
+    .settings-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="label">Voice Briefing System</div>
+  <h1>語音簡報</h1>
+  <p>選擇智慧音箱，將文字轉為語音播報</p>
+</div>
+
+<!-- Speaker Selection -->
+<div class="card">
+  <div class="section-title">目標音箱</div>
+  <div class="speakers">
+    <button class="speaker-btn" data-speaker="google" onclick="selectSpeaker('google')">
+      <div class="speaker-icon">🔵</div>
+      <div class="speaker-name">Google Home</div>
+      <div class="status-dot"></div>
+    </button>
+    <button class="speaker-btn" data-speaker="apple" onclick="selectSpeaker('apple')">
+      <div class="speaker-icon">⚪</div>
+      <div class="speaker-name">Apple HomePod</div>
+      <div class="status-dot"></div>
+    </button>
+    <button class="speaker-btn" data-speaker="xiaomi" onclick="selectSpeaker('xiaomi')">
+      <div class="speaker-icon">🟠</div>
+      <div class="speaker-name">小愛同學</div>
+      <div class="status-dot"></div>
+    </button>
+  </div>
+  <div id="configHint" class="config-hint"></div>
+</div>
+
+<!-- Text Input -->
+<div class="card">
+  <div class="section-title">播報內容</div>
+  <div class="text-area-wrap">
+    <textarea id="briefingText" placeholder="輸入要播報的文字內容..." maxlength="2000"
+      oninput="updateCharCount()"></textarea>
+  </div>
+  <div class="char-count"><span id="charCount">0</span> / 2000</div>
+
+  <div class="settings-row" style="margin-top:20px;">
+    <div class="setting-group">
+      <label>語速 Speed</label>
+      <div class="slider-wrap">
+        <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1"
+          oninput="document.getElementById('speedVal').textContent=this.value+'x'">
+        <span class="slider-val" id="speedVal">1x</span>
+      </div>
+    </div>
+    <div class="setting-group">
+      <label>音量 Volume</label>
+      <div class="slider-wrap">
+        <input type="range" id="volume" min="0" max="100" step="5" value="70"
+          oninput="document.getElementById('volVal').textContent=this.value+'%'">
+        <span class="slider-val" id="volVal">70%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Send Button -->
+<button class="send-btn" id="sendBtn" onclick="sendBriefing()" disabled>
+  選擇音箱後發送
+</button>
+
+<!-- Wave + Log -->
+<div class="log" id="logArea">
+  <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px;">
+    <div class="wave-indicator" id="waveIndicator">
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedSpeaker = null;
+
+const hints = {
+  google: `需要安裝 <code>pychromecast</code>，並確保電腦與 Google Home 在同一 Wi-Fi 網路。<br>後端執行：<code>python server.py</code>，預設監聽 <code>http://localhost:5000</code>`,
+  apple: `Apple HomePod 透過 HomeKit 協議，需安裝 <code>HAP-python</code> 或使用 Shortcuts 自動化捷徑觸發。<br>建議方式：使用 Mac 上的「捷徑」App 搭配本地 HTTP 觸發。`,
+  xiaomi: `小愛同學透過 <code>MIoT</code> API，需準備小米帳號 Token。<br>安裝：<code>pip install python-miio</code>，設定 <code>MI_TOKEN</code> 與 <code>MI_IP</code> 環境變數。`
+};
+
+function selectSpeaker(name) {
+  selectedSpeaker = name;
+  document.querySelectorAll('.speaker-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-speaker="${name}"]`).classList.add('active');
+
+  const hint = document.getElementById('configHint');
+  hint.innerHTML = hints[name];
+  hint.classList.add('show');
+
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = false;
+  btn.textContent = `發送至 ${{'google':'Google Home','apple':'Apple HomePod','xiaomi':'小愛同學'}[name]}`;
+}
+
+function updateCharCount() {
+  const len = document.getElementById('briefingText').value.length;
+  document.getElementById('charCount').textContent = len;
+}
+
+function addLog(msg, type='info') {
+  const log = document.getElementById('logArea');
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  const now = new Date().toLocaleTimeString('zh-TW');
+  entry.textContent = `[${now}] ${msg}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendBriefing() {
+  const text = document.getElementById('briefingText').value.trim();
+  if (!text) { addLog('請輸入播報內容', 'error'); return; }
+  if (!selectedSpeaker) { addLog('請選擇目標音箱', 'error'); return; }
+
+  const speed = document.getElementById('speed').value;
+  const volume = document.getElementById('volume').value;
+
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('waveIndicator').classList.add('active');
+  addLog(`正在發送至 ${selectedSpeaker}...`, 'info');
+
+  try {
+    const res = await fetch('http://localhost:5000/speak', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, speaker: selectedSpeaker, speed: parseFloat(speed), volume: parseInt(volume) })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      addLog(`✓ 播報成功：${data.message}`, 'success');
+    } else {
+      const err = await res.json();
+      addLog(`✗ 失敗：${err.error}`, 'error');
+    }
+  } catch(e) {
+    addLog(`✗ 無法連線至本地後端（請確認 server.py 已執行）`, 'error');
+    // Fallback: browser TTS
+    addLog('⚡ 改用瀏覽器內建 TTS 預覽...', 'info');
+    browserTTS(text, parseFloat(speed), parseInt(volume));
+  } finally {
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('waveIndicator').classList.remove('active');
+  }
+}
+
+function browserTTS(text, rate, volume) {
+  if (!('speechSynthesis' in window)) { addLog('瀏覽器不支援 TTS', 'error'); return; }
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'zh-TW';
+  utter.rate = rate;
+  utter.volume = volume / 100;
+  const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('zh'));
+  if (voices.length) utter.voice = voices[0];
+  utter.onstart = () => document.getElementById('waveIndicator').classList.add('active');
+  utter.onend = () => {
+    document.getElementById('waveIndicator').classList.remove('active');
+    addLog('✓ 瀏覽器 TTS 播放完成', 'success');
+  };
+  speechSynthesis.speak(utter);
+}
+</script>
+</body>
+</html>
