@@ -7,17 +7,125 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
+
+// ─── 播放管理器：支援打斷播放 ─────────────────────────────────────────────────
+
+type PlaybackManager struct {
+	mu         sync.Mutex
+	current    AudioPlayer
+	stopChan   chan struct{}
+	isPlaying  bool
+	volume     int
+	speaker    string
+	finishChan chan struct{}
+}
+
+var playbackMgr = PlaybackManager{volume: 50}
+
+func (pm *PlaybackManager) Play(p AudioPlayer) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if pm.isPlaying && pm.current != nil {
+		fmt.Println("🛑 正在打斷當前播放...")
+		pm.stopChan <- struct{}{}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	pm.current = p
+	pm.stopChan = make(chan struct{})
+	pm.finishChan = make(chan struct{})
+	pm.isPlaying = true
+}
+
+func (pm *PlaybackManager) MarkFinished() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.finishChan != nil {
+		close(pm.finishChan)
+	}
+}
+
+func (pm *PlaybackManager) SetVolume(level int) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if !pm.isPlaying || pm.current == nil {
+		return fmt.Errorf("目前沒有正在播放的內容")
+	}
+
+	pm.volume = level
+	return pm.current.SetVolume(level)
+}
+
+func (pm *PlaybackManager) GetVolume() int {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.volume
+}
+
+func (pm *PlaybackManager) SetSpeaker(s string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.speaker = s
+}
+
+func (pm *PlaybackManager) GetSpeaker() string {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.speaker
+}
+
+func (pm *PlaybackManager) Stop() error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if !pm.isPlaying || pm.current == nil {
+		return fmt.Errorf("目前沒有正在播放的內容")
+	}
+
+	pm.stopChan <- struct{}{}
+	pm.isPlaying = false
+	pm.current = nil
+	return nil
+}
+
+func (pm *PlaybackManager) IsPlaying() bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.isPlaying
+}
+
+func (pm *PlaybackManager) GetStopChan() <-chan struct{} {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.stopChan == nil {
+		return nil
+	}
+	return pm.stopChan
+}
+
+func (pm *PlaybackManager) GetFinishChan() <-chan struct{} {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.finishChan == nil {
+		return nil
+	}
+	return pm.finishChan
+}
 
 // ─── HTTP REST API 伺服器 ─────────────────────────────────────────────────────
 
 type SpeakRequest struct {
-	Text        string  `json:"text"`
-	Speaker     string  `json:"speaker"`    // "google" | "apple" | "xiaoai"
-	Language    string  `json:"language"`   // "zh-TW" | "zh-CN" | "en-US"
-	TTSEngine   string  `json:"tts_engine"` // "local" | "google" | "azure"
-	VoiceSpeed  float64 `json:"speed"`
-	Volume      int     `json:"volume"`
+	Text       string  `json:"text"`
+	Speaker    string  `json:"speaker"`    // "google" | "apple" | "xiaoai"
+	Language   string  `json:"language"`   // "zh-TW" | "zh-CN" | "en-US"
+	TTSEngine  string  `json:"tts_engine"` // "local" | "google" | "azure"
+	VoiceSpeed float64 `json:"speed"`
+	Volume     int     `json:"volume"`
 }
 
 type APIResponse struct {
@@ -32,6 +140,9 @@ func runHTTPServer(port int) error {
 	mux.HandleFunc("/api/speak", handleSpeak)
 	mux.HandleFunc("/api/play", handlePlayFile)
 	mux.HandleFunc("/api/play-upload", handlePlayUpload)
+	mux.HandleFunc("/api/stop", handleStop)
+	mux.HandleFunc("/api/status", handleStatus)
+	mux.HandleFunc("/api/volume", handleVolume)
 	mux.HandleFunc("/api/devices", handleListDevices)
 	mux.HandleFunc("/health", handleHealth)
 
@@ -42,6 +153,8 @@ func runHTTPServer(port int) error {
 	fmt.Printf("🚀 Voice Briefing API 伺服器啟動: http://localhost%s\n", addr)
 	fmt.Println("📋 API 端點:")
 	fmt.Printf("   POST http://localhost%s/api/speak\n", addr)
+	fmt.Printf("   POST http://localhost%s/api/stop - 打斷播放\n", addr)
+	fmt.Printf("   GET  http://localhost%s/api/status - 播放狀態\n", addr)
 	fmt.Printf("   GET  http://localhost%s/api/devices\n", addr)
 	fmt.Printf("   GET  http://localhost%s\n", addr)
 
@@ -157,11 +270,37 @@ func handlePlayFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 非同步播放，立即回傳
+	playbackMgr.Play(player)
+	playbackMgr.SetSpeaker(req.Speaker)
+	playbackMgr.mu.Lock()
+	playbackMgr.volume = req.Volume
+	playbackMgr.mu.Unlock()
+	stopChan := playbackMgr.GetStopChan()
+
+	// 等待播放完成或被中斷
 	go func() {
+		select {
+		case <-stopChan:
+			fmt.Println("🛑 播放已被打斷")
+			playbackMgr.mu.Lock()
+			playbackMgr.isPlaying = false
+			playbackMgr.mu.Unlock()
+			return
+		default:
+		}
 		if err := player.PlayFile(req.File); err != nil {
 			fmt.Printf("❌ [API] 播放失敗: %v\n", err)
+			playbackMgr.mu.Lock()
+			playbackMgr.isPlaying = false
+			playbackMgr.mu.Unlock()
+			return
 		}
+		// 播放成功完成
+		fmt.Println("✅ 播放完畢")
+		playbackMgr.MarkFinished()
+		playbackMgr.mu.Lock()
+		playbackMgr.isPlaying = false
+		playbackMgr.mu.Unlock()
 	}()
 
 	jsonSuccess(w, fmt.Sprintf("已開始透過 %s 播放: %s", player.Name(), req.File))
@@ -237,12 +376,38 @@ func handlePlayUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 非同步播放，播完後刪暫存檔
+	playbackMgr.Play(player)
+	playbackMgr.SetSpeaker(speaker)
+	playbackMgr.mu.Lock()
+	playbackMgr.volume = volume
+	playbackMgr.mu.Unlock()
+	stopChan := playbackMgr.GetStopChan()
+
+	// 等待播放完成或被中斷
 	go func() {
 		defer os.Remove(tmpPath)
+		select {
+		case <-stopChan:
+			fmt.Println("🛑 播放已被打斷")
+			playbackMgr.mu.Lock()
+			playbackMgr.isPlaying = false
+			playbackMgr.mu.Unlock()
+			return
+		default:
+		}
 		if err := player.PlayFile(tmpPath); err != nil {
 			fmt.Printf("❌ [Upload] 播放失敗: %v\n", err)
+			playbackMgr.mu.Lock()
+			playbackMgr.isPlaying = false
+			playbackMgr.mu.Unlock()
+			return
 		}
+		// 播放成功完成
+		fmt.Println("✅ 播放完畢")
+		playbackMgr.MarkFinished()
+		playbackMgr.mu.Lock()
+		playbackMgr.isPlaying = false
+		playbackMgr.mu.Unlock()
 	}()
 
 	jsonSuccess(w, fmt.Sprintf("已開始透過 %s 播放: %s (%.1f MB)",
@@ -271,6 +436,63 @@ func handleListDevices(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		jsonError(w, "只支援 POST 或 GET 方法", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := playbackMgr.Stop(); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonSuccess(w, "已停止當前播放")
+}
+
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "只支援 GET 方法", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"isPlaying": playbackMgr.IsPlaying(),
+		"volume":    playbackMgr.GetVolume(),
+		"speaker":   playbackMgr.GetSpeaker(),
+	})
+}
+
+func handleVolume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "只支援 POST 方法", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Volume int `json:"volume"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "JSON 格式錯誤: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Volume < 0 {
+		req.Volume = 0
+	}
+	if req.Volume > 100 {
+		req.Volume = 100
+	}
+
+	if err := playbackMgr.SetVolume(req.Volume); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonSuccess(w, fmt.Sprintf("音量已調整為 %d%%", req.Volume))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -343,6 +565,19 @@ const webUIHTML = `<!DOCTYPE html>
     .action-btn:hover { background: #c73652; }
     .action-btn:disabled { background: #444; cursor: not-allowed; }
 
+    .stop-btn { width: 100%; padding: 0.75rem; background: #444; border: none; border-radius: 10px; color: #aaa; font-size: 0.9rem; cursor: pointer; margin-bottom: 1rem; transition: all 0.2s; }
+    .stop-btn:hover { background: #f44336; color: white; }
+    .stop-btn.playing { background: #f44336; color: white; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
+    .playing-indicator { display: none; text-align: center; padding: 0.5rem; margin-bottom: 1rem; background: rgba(76,175,80,0.15); border: 1px solid #4caf5055; border-radius: 8px; color: #81c784; font-size: 0.85rem; }
+    .playing-indicator.active { display: block; }
+
+    .volume-control { display: none; padding: 1rem; background: #0d1b2a; border-radius: 10px; margin-bottom: 1rem; }
+    .volume-control.active { display: block; }
+    .volume-control label { display: block; font-size: 0.85rem; color: #aaa; margin-bottom: 0.5rem; }
+    .volume-control input[type=range] { width: 100%; }
+
     .status { margin-top: 1rem; padding: 0.8rem 1rem; border-radius: 8px; text-align: center; display: none; font-size: 0.9rem; }
     .status.success { background: rgba(76,175,80,0.15); color: #81c784; border: 1px solid #4caf5055; display: block; }
     .status.error { background: rgba(244,67,54,0.15); color: #ef9a9a; border: 1px solid #f4433655; display: block; }
@@ -360,6 +595,18 @@ const webUIHTML = `<!DOCTYPE html>
     <button class="speaker-btn active" data-speaker="google" onclick="selectSpeaker(this)">🏠 Google Home</button>
     <button class="speaker-btn" data-speaker="apple" onclick="selectSpeaker(this)">🎵 HomePod</button>
     <button class="speaker-btn" data-speaker="xiaoai" onclick="selectSpeaker(this)">🤖 小愛同學</button>
+  </div>
+
+  <!-- 播放狀態與停止按鈕 -->
+  <div class="playing-indicator" id="playingIndicator">🔊 正在播放...</div>
+  <button class="stop-btn" id="stopBtn" onclick="stopPlayback()">⏹️ 停止播放</button>
+
+  <!-- 即時音量調整 -->
+  <div class="volume-control" id="volumeControl" style="display:none;">
+    <label>音量: <span id="volValLive">70</span>%</label>
+    <input type="range" id="volumeLive" min="0" max="100" step="5" value="70"
+      oninput="document.getElementById('volValLive').textContent=this.value"
+      onchange="adjustVolume(this.value)">
   </div>
 
   <!-- 分頁切換 -->
@@ -476,59 +723,9 @@ async function speak() {
         volume: parseInt(document.getElementById('volumeTTS').value),
       })
     });
-    const data = await resp.json();
-    data.success ? showStatus('✅ ' + data.message, true) : showStatus('❌ ' + (data.error || '播放失敗'), false);
-  } catch (e) {
-    showStatus('❌ 網路錯誤: ' + e.message, false);
-  } finally {
-    setLoading(btn, '🎙️ 播放語音', false);
-  }
-}
-
-// ── 音訊檔案播放 ─────────────────────────────────────────────────────────────
-
-function handleFileSelect(input) {
-  if (input.files && input.files[0]) {
-    selectedFile = input.files[0];
-    document.getElementById('selectedFileName').textContent = '✓ ' + selectedFile.name;
-    document.getElementById('filePath').value = '';
-  }
-}
-
-function handleDragOver(e) {
-  e.preventDefault();
-  document.getElementById('fileZone').classList.add('drag-over');
-}
-function handleDragLeave(e) {
-  document.getElementById('fileZone').classList.remove('drag-over');
-}
-function handleDrop(e) {
-  e.preventDefault();
-  document.getElementById('fileZone').classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) {
-    selectedFile = file;
-    document.getElementById('selectedFileName').textContent = '✓ ' + file.name;
-    document.getElementById('filePath').value = '';
-  }
-}
-
-async function playFile() {
-  const localPath = document.getElementById('filePath').value.trim();
-  const volume = parseInt(document.getElementById('volumeFile').value);
-  const btn = document.getElementById('playBtn');
-
-  // 模式 A：伺服器本地路徑（直接 POST JSON）
-  if (localPath) {
-    setLoading(btn, '⏳ 播放中...', true);
-    try {
-      const resp = await fetch('/api/play', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: localPath, speaker: currentSpeaker, volume })
-      });
       const data = await resp.json();
       data.success ? showStatus('✅ ' + data.message, true) : showStatus('❌ ' + (data.error || '播放失敗'), false);
+      if (data.success) updatePlayingStatus(true);
     } catch (e) {
       showStatus('❌ 網路錯誤: ' + e.message, false);
     } finally {
@@ -556,6 +753,7 @@ async function playFile() {
     });
     const data = await resp.json();
     data.success ? showStatus('✅ ' + data.message, true) : showStatus('❌ ' + (data.error || '播放失敗'), false);
+    if (data.success) updatePlayingStatus(true);
   } catch (e) {
     showStatus('❌ 網路錯誤: ' + e.message, false);
   } finally {
@@ -572,6 +770,76 @@ function showStatus(msg, ok) {
   el.className = 'status ' + (ok ? 'success' : 'error');
   el.textContent = msg;
 }
+
+function updatePlayingStatus(isPlaying, volume) {
+  const indicator = document.getElementById('playingIndicator');
+  const stopBtn = document.getElementById('stopBtn');
+  const volControl = document.getElementById('volumeControl');
+  const volSlider = document.getElementById('volumeLive');
+  if (isPlaying) {
+    indicator.classList.add('active');
+    stopBtn.classList.add('playing');
+    stopBtn.textContent = '⏹️ 打斷播放';
+    volControl.classList.add('active');
+    if (volume !== undefined) {
+      volSlider.value = volume;
+      document.getElementById('volValLive').textContent = volume;
+    }
+  } else {
+    indicator.classList.remove('active');
+    stopBtn.classList.remove('playing');
+    stopBtn.textContent = '⏹️ 停止播放';
+    volControl.classList.remove('active');
+  }
+}
+
+async function checkPlaybackStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    const data = await resp.json();
+    updatePlayingStatus(data.isPlaying, data.volume);
+  } catch (e) {
+    console.error('檢查播放狀態失敗:', e);
+  }
+}
+
+async function adjustVolume(volume) {
+  try {
+    const resp = await fetch('/api/volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: parseInt(volume) })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      console.log('音量已調整:', volume);
+    }
+  } catch (e) {
+    console.error('調整音量失敗:', e);
+  }
+}
+
+async function stopPlayback() {
+  const btn = document.getElementById('stopBtn');
+  btn.textContent = '⏳ 停止中...';
+  try {
+    const resp = await fetch('/api/stop', { method: 'POST' });
+    const data = await resp.json();
+    if (data.success) {
+      updatePlayingStatus(false);
+      showStatus('✅ 已停止播放', true);
+    } else {
+      showStatus('❌ ' + (data.error || '停止失敗'), false);
+    }
+  } catch (e) {
+    showStatus('❌ 網路錯誤: ' + e.message, false);
+  }
+  btn.textContent = '⏹️ 停止播放';
+}
+
+// 定期檢查播放狀態
+setInterval(checkPlaybackStatus, 2000);
+checkPlaybackStatus();
 
 document.getElementById('text').addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'Enter') speak();

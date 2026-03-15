@@ -17,6 +17,7 @@ import (
 type AudioPlayer interface {
 	Speaker
 	PlayFile(filePath string) error
+	StopPlayback() error // 新增：用於主動清空音箱的播放狀態
 }
 
 // ─── 音訊檔案資訊 ──────────────────────────────────────────────────────────────
@@ -103,13 +104,30 @@ func (g *GoogleHomeSpeaker) PlayFile(filePath string) error {
 	}
 
 	// 音訊時長已知就用真實時長，否則用大小估算
-	ttl := info.Duration + 3*time.Second
-	if ttl < 10*time.Second {
-		ttl = estimateTTL(int(info.Size), info.Ext)
+	var ttl time.Duration
+	if info.Duration > 0 { // ⚠️ 關鍵修改：多給 5 分鐘以上的容錯時間，確保音箱完全抓完檔案
+		ttl = info.Duration + 5*time.Minute
+	} else {
+		// ⚠️ 關鍵修改：如果沒有裝 ffprobe 算不出時間，給一個極大的預設值（例如 1 小時）
+		// 避免長音檔播到一半伺服器自盡
+		ttl = 1 * time.Hour
 	}
 
 	// castToDevice 負責在播放完成後呼叫 stop()
 	return g.castToDevice(audioURL, ct, ttl, stop)
+}
+
+// StopPlayback 停止 Google Home 播放
+func (g *GoogleHomeSpeaker) StopPlayback() error {
+	if commandExists("catt") {
+		args := g.deviceArgs([]string{"stop"})
+		out, err := exec.Command("catt", args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("停止播放失敗: %w\n%s", err, out)
+		}
+		return nil
+	}
+	return fmt.Errorf("需要安裝 catt 才能停止播放: pip install catt")
 }
 
 // ─── Apple HomePod：播放本地音訊檔案 ──────────────────────────────────────────
@@ -136,6 +154,11 @@ func (a *AppleHomeSpeaker) PlayFile(filePath string) error {
 	}
 
 	return a.playViaAirPlay(playFile)
+}
+
+// StopPlayback 停止 Apple HomePod 播放
+func (a *AppleHomeSpeaker) StopPlayback() error {
+	return nil
 }
 
 // ─── 小愛同學：播放本地音訊檔案 ───────────────────────────────────────────────
@@ -202,6 +225,21 @@ func (x *XiaoAISpeaker) PlayFile(filePath string) error {
 	return fmt.Errorf("播放失敗：需要設定 XIAOAI_DEVICE_IP + XIAOAI_DEVICE_TOKEN 或 XIAOAI_MI_ID")
 }
 
+// StopPlayback 停止小愛同學播放
+func (x *XiaoAISpeaker) StopPlayback() error {
+	deviceIP := x.getDeviceIP()
+	deviceToken := os.Getenv("XIAOAI_DEVICE_TOKEN")
+	if deviceIP != "" && deviceToken != "" {
+		payload := map[string]interface{}{
+			"id":     3,
+			"method": "stop_play",
+			"params": []string{},
+		}
+		return x.sendMiIOPacket(deviceIP, deviceToken, payload)
+	}
+	return nil
+}
+
 // playURLViaMiIO 發 MiIO play_url 指令
 func (x *XiaoAISpeaker) playURLViaMiIO(url string) error {
 	payload := map[string]interface{}{
@@ -250,8 +288,9 @@ func serveFileTemporarily(filePath, contentType string, port int) (string, func(
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      mux,
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 5 * time.Minute,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() { srv.ListenAndServe() }()

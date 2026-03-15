@@ -71,6 +71,21 @@ func (c *castConn) recv(timeout time.Duration) (string, string, error) {
 	return pl, ns, nil
 }
 
+// keepAlive 回應 PING 保持連線，直到 duration 到期
+func keepAlive(cc *castConn, nsHB, src, dst string, duration time.Duration) {
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		pl, ns, err := cc.recv(3 * time.Second)
+		if err != nil {
+			// 逾時或中斷都直接結束等待
+			return
+		}
+		if ns == nsHB && containsStr(pl, "PING") {
+			cc.send(nsHB, src, dst, `{"type":"PONG"}`)
+		}
+	}
+}
+
 // ─── ChromecastPlay：連接並播放，保持連線直到播放完畢 ─────────────────────────
 
 // ChromecastPlay 對 Google Home 發送 LOAD，等待 PLAYING 狀態後
@@ -236,10 +251,10 @@ func waitPlaying(cc *castConn, nsMedia, nsHB, src, dst string) error {
 					idleReason, _ := st["idleReason"].(string)
 					if idleReason == "ERROR" {
 						return fmt.Errorf(
-							"Google Home 播放失敗（IDLE/ERROR）\n"+
-								"   最常見原因：音箱無法從 http://電腦IP:18765 下載音訊\n"+
-								"   請確認 Windows 防火牆允許 port 18765 的輸入連線：\n"+
-								"   netsh advfirewall firewall add rule name=\"VoiceBriefing\" "+
+							"Google Home 播放失敗（IDLE/ERROR）\n" +
+								"   最常見原因：音箱無法從 http://電腦IP:18765 下載音訊\n" +
+								"   請確認 Windows 防火牆允許 port 18765 的輸入連線：\n" +
+								"   netsh advfirewall firewall add rule name=\"VoiceBriefing\" " +
 								"protocol=TCP dir=in localport=18765 action=allow")
 					}
 				}
@@ -247,21 +262,6 @@ func waitPlaying(cc *castConn, nsMedia, nsHB, src, dst string) error {
 		}
 	}
 	return fmt.Errorf("逾時：未收到 PLAYING 狀態（15s）")
-}
-
-// keepAlive 回應 PING 保持連線，直到 duration 到期
-func keepAlive(cc *castConn, nsHB, src, dst string, duration time.Duration) {
-	deadline := time.Now().Add(duration)
-	for time.Now().Before(deadline) {
-		pl, ns, err := cc.recv(3 * time.Second)
-		if err != nil {
-			// 逾時或中斷都直接結束等待
-			return
-		}
-		if ns == nsHB && containsStr(pl, "PING") {
-			cc.send(nsHB, src, dst, `{"type":"PONG"}`)
-		}
-	}
 }
 
 // ─── 最小 protobuf 編解碼 ─────────────────────────────────────────────────────

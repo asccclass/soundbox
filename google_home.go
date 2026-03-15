@@ -121,8 +121,9 @@ func (g *GoogleHomeSpeaker) serveAudioFile(filePath, ext string) (string, string
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", g.serverPort),
 		Handler:      mux,
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 5 * time.Minute,
+		ReadTimeout:  10 * time.Minute,
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 	go srv.ListenAndServe()
 	time.Sleep(300 * time.Millisecond)
@@ -140,7 +141,7 @@ func (g *GoogleHomeSpeaker) castToDevice(audioURL, contentType string, ttl time.
 	if deviceIP != "" {
 		fmt.Printf("   🎯 Chromecast 直連: %s\n", deviceIP)
 		err := ChromecastPlay(deviceIP, audioURL, contentType, ttl)
-		stopServer() // 播完後才關 HTTP Server
+		//stopServer() // 播完後才關 HTTP Server
 		if err != nil {
 			fmt.Printf("   ⚠️  Chromecast 失敗，嘗試 catt: %v\n", err)
 			// 繼續嘗試 catt（但 server 已關，catt 會失敗；如需支援 catt 備用需重啟 server）
@@ -162,7 +163,7 @@ func (g *GoogleHomeSpeaker) castToDevice(audioURL, contentType string, ttl time.
 
 		// catt 是同步的，等它結束後再關 server
 		out, err := exec.Command("catt", args...).CombinedOutput()
-		stopServer()
+		// stopServer()
 		if err != nil {
 			outStr := string(out)
 			if strings.Contains(outStr, "No devices found") {
@@ -174,7 +175,7 @@ func (g *GoogleHomeSpeaker) castToDevice(audioURL, contentType string, ttl time.
 		return nil
 	}
 
-	stopServer()
+	defer stopServer()
 	if deviceIP == "" {
 		return fmt.Errorf("請指定 --google-ip <Google Home 的 IP 位址>")
 	}

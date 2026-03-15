@@ -41,7 +41,7 @@ func init() {
 	speakCmd.Flags().StringP("lang", "l", "zh-TW", "語言: zh-TW | zh-CN | en-US")
 	speakCmd.Flags().StringP("tts", "t", "local", "TTS 引擎: local | google | azure")
 	speakCmd.Flags().Float64P("speed", "r", 1.0, "語速 (0.5~2.0)")
-	speakCmd.Flags().IntP("volume", "v", 70, "音量 (0~100)")
+	speakCmd.Flags().IntP("volume", "v", 50, "音量 (0~100)")
 	speakCmd.Flags().BoolP("interactive", "i", false, "互動模式（多次輸入）")
 	speakCmd.Flags().String("google-device", "", "Google Home 裝置名稱")
 	speakCmd.Flags().String("google-ip", "", "Google Home IP 位址")
